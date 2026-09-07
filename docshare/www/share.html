@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="robots" content="noindex, nofollow">
+	<meta http-equiv="Content-Security-Policy"
+		content="script-src 'nonce-{{ csp_nonce }}'; object-src 'none'; base-uri 'none'">
+	<title>{{ title }}</title>
+	{% if print_css %}<link rel="stylesheet" href="{{ print_css }}">{% endif %}
+	{% if document_styles %}<style>{{ document_styles | safe }}</style>{% endif %}
+	<style>
+		/* The page frames the document like paper on a desk: a grey ground, one
+		   centred A4-width column, and quiet outline actions above it. Colours are
+		   Tailwind's grey ramp. Deliberately light-only — a print format is white
+		   paper, so honouring prefers-color-scheme here would fight the content. */
+		:root {
+			--ds-ground: #f8f9fa;
+			--ds-paper: #ffffff;
+			--ds-border: #e5e7eb;
+			--ds-btn-border: #d1d5db;
+			--ds-btn-hover: #f3f4f6;
+			--ds-ink: #111827;
+			--ds-ink-soft: #374151;
+			--ds-ink-faint: #6b7280;
+			/* A4 (21cm) plus breathing room, matching the print column. */
+			--ds-column: 22.5cm;
+		}
+
+		* { box-sizing: border-box; }
+
+		body {
+			margin: 0;
+			padding: 0 16px 48px;
+			background: var(--ds-ground);
+			color: var(--ds-ink);
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+				"Helvetica Neue", Arial, "Noto Sans", sans-serif;
+			font-size: 16px;
+			line-height: 1.5;
+		}
+
+		/* ---- header ---------------------------------------------------- */
+
+		.ds-header {
+			max-width: var(--ds-column);
+			margin: 0 auto;
+			padding: 24px 0 20px;
+			text-align: center;
+		}
+
+		.ds-brand {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			gap: 12px;
+			margin-bottom: 16px;
+			min-height: 36px;
+		}
+
+		/* Height-constrained so any configured logo — wide wordmark or square
+		   glyph — sits on the same baseline without distorting its aspect. */
+		.ds-brand img {
+			max-height: 36px;
+			max-width: 180px;
+			width: auto;
+			object-fit: contain;
+		}
+
+		.ds-company {
+			font-size: 17px;
+			font-weight: 600;
+			color: var(--ds-ink);
+		}
+
+		.ds-brand-text {
+			font-size: 13px;
+			font-weight: 600;
+			letter-spacing: 0.08em;
+			text-transform: uppercase;
+			color: var(--ds-ink-faint);
+		}
+
+		.ds-actions {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			gap: 12px;
+			flex-wrap: wrap;
+		}
+
+		.ds-btn {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			min-height: 48px;
+			min-width: 140px;
+			padding: 10px 14px;
+			border: 1px solid var(--ds-btn-border);
+			border-radius: 8px;
+			background: var(--ds-paper);
+			color: var(--ds-ink);
+			font-family: inherit;
+			font-size: 16px;
+			font-weight: 500;
+			text-decoration: none;
+			cursor: pointer;
+			transition: background 0.15s ease, border-color 0.15s ease;
+		}
+
+		.ds-btn:hover { background: var(--ds-btn-hover); }
+		.ds-btn:focus-visible { outline: 2px solid var(--ds-ink-soft); outline-offset: 2px; }
+		.ds-btn svg { width: 18px; height: 18px; margin-right: 8px; flex: none; }
+
+		/* ---- document ---------------------------------------------------- */
+
+		.ds-paper {
+			max-width: var(--ds-column);
+			margin: 0 auto 20px;
+			padding: 24px;
+			background: var(--ds-paper);
+			border: 1px solid var(--ds-border);
+			border-radius: 8px;
+			box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+			overflow-x: auto;
+		}
+
+		.ds-paper:last-child { margin-bottom: 0; }
+
+		/* The extracted fragment brings printview's screen rules with it — a white
+		   card with its own max-width, 0.75in padding and radius. .ds-paper is
+		   already that card, so flatten the inner one. Higher specificity, so it
+		   wins regardless of injection order. Anything printview would have drawn
+		   around it (gutter, action banner) is stripped server-side. */
+		.ds-paper .print-format {
+			max-width: none;
+			min-height: 0;
+			margin: 0;
+			padding: 0;
+			background: transparent;
+			border-radius: 0;
+			box-shadow: none;
+		}
+		.ds-paper .print-format-gutter { background: none; padding: 0; }
+		.ds-paper .action-banner { display: none !important; }
+
+		/* ---- unavailable state ------------------------------------------- */
+
+		.ds-invalid {
+			max-width: 30rem;
+			margin: 15vh auto 0;
+			padding: 40px 24px;
+			background: var(--ds-paper);
+			border: 1px solid var(--ds-border);
+			border-radius: 8px;
+			text-align: center;
+		}
+		.ds-invalid h1 { font-size: 20px; margin: 0 0 8px; color: var(--ds-ink); }
+		.ds-invalid p { margin: 0; color: var(--ds-ink-faint); }
+
+		/* ---- print ------------------------------------------------------- */
+
+		/* No @page rule here on purpose. ERPNext print formats declare their own
+		   (Avril's sets "size: A4; margin: 8mm 10mm"), and the page stylesheet is
+		   emitted after the hoisted format CSS — so any @page of ours would
+		   silently override the geometry the format was designed around. */
+
+		@media print {
+			/* MUST stay inside @media print: .noprint marks the on-screen header,
+			   so at top level this rule hides the page's own nav at all times. */
+			.noprint, .noprint * { display: none !important; }
+			body { padding: 0; background: #fff; }
+			.ds-paper {
+				max-width: none;
+				margin: 0;
+				padding: 0;
+				border: 0;
+				border-radius: 0;
+				box-shadow: none;
+				overflow: visible;
+			}
+			/* No rule separates documents on screen, so give each its own sheet. */
+			.ds-paper + .ds-paper { page-break-before: always; break-before: page; }
+		}
+
+		@media (max-width: 640px) {
+			body { padding: 0 10px 32px; }
+			.ds-header { padding: 16px 0 14px; }
+			.ds-paper { padding: 14px; }
+			.ds-actions { flex-direction: column; align-items: stretch; }
+			.ds-btn { width: 100%; }
+		}
+	</style>
+</head>
+<body>
+	{% if invalid %}
+	<div class="ds-invalid">
+		<h1>{{ _("Link Unavailable") }}</h1>
+		<p>{{ message }}</p>
+	</div>
+	{% else %}
+	<header class="ds-header noprint">
+		<div class="ds-brand">
+			{% if brand_logo %}<img src="{{ brand_logo }}" alt="{{ brand_name }}">{% endif %}
+			<span class="ds-company">{{ brand_name }}</span>
+		</div>
+		<div class="ds-actions">
+			<button type="button" class="ds-btn" id="ds-print">
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+				{{ _("Print") }}
+			</button>
+		</div>
+	</header>
+
+	<main>
+		{% for d in documents %}
+		<div class="ds-paper">
+			<div class="print-format">{{ d.html | safe }}</div>
+		</div>
+		{% endfor %}
+	</main>
+	<script nonce="{{ csp_nonce }}">
+		document.getElementById("ds-print").addEventListener("click", function () {
+			window.print();
+		});
+	</script>
+	{% endif %}
+</body>
+</html>

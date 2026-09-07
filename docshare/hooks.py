@@ -5,6 +5,56 @@ app_description = "Unauthenticated printable document share links for any Frappe
 app_email = "dev@itechnologies.ng"
 app_license = "mit"
 
+# ------------------
+# Required apps
+# ------------------
+
+# DocShare uses ERPNext's native linked-documents API and party fields
+# (customer/lead/party_type) to resolve whom a shared document belongs to.
+required_apps = ["erpnext"]
+
+# ------------------
+# Includes
+# ------------------
+
+# Inject the Share Document menu into every Desk form view.
+app_include_js = "docshare.bundle.js"
+app_include_css = "docshare.bundle.css"
+
+# ------------------
+# Website route rules
+# ------------------
+
+# /share/<token> -> www/share (server-rendered Jinja, no Desk chrome)
+website_route_rules = [
+	{"from_route": "/share/<token>", "to_route": "share"},
+]
+
+# ------------------
+# Document events
+# ------------------
+
+# When any document is trashed, auto-disable any DocShare Links pointing to it.
+doc_events = {
+	"*": {
+		"on_trash": "docshare.api.on_document_trash",
+	}
+}
+
+# ------------------
+# Permissions
+# ------------------
+
+# DocShare Link access is gated by the caller's permission on the
+# referenced target document. See docshare.api for the implementation.
+has_permission = {
+	"DocShare Link": "docshare.api.has_docshare_link_permission",
+}
+
+permission_query_conditions = {
+	"DocShare Link": "docshare.api.get_docshare_link_permission_query_conditions",
+}
+
 # Apps
 # ------------------
 
@@ -25,7 +75,7 @@ app_license = "mit"
 # ------------------
 
 # include js, css files in header of desk.html
-# app_include_css = "/assets/docshare/css/docshare.css"
+# app_include_css = "docshare.bundle.css"
 # app_include_js = "/assets/docshare/js/docshare.js"
 
 # include js, css files in header of web template

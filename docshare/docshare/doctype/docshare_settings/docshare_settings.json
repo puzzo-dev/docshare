@@ -1,0 +1,99 @@
+{
+ "actions": [],
+ "creation": "2026-09-06 17:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "defaults_section",
+  "default_expiry_days",
+  "share_linked_documents",
+  "column_break_1",
+  "notify_on_view",
+  "track_ip_address",
+  "notifications_section",
+  "notification_help"
+ ],
+ "fields": [
+  {
+   "fieldname": "defaults_section",
+   "fieldtype": "Section Break",
+   "label": "Defaults"
+  },
+  {
+   "default": "7",
+   "description": "Default expiry in days for new share links. 0 = never expire.",
+   "fieldname": "default_expiry_days",
+   "fieldtype": "Int",
+   "label": "Default Expiry (Days)"
+  },
+  {
+   "default": "1",
+   "description": "Show linked documents in the share popup so users can share related documents alongside the main one.",
+   "fieldname": "share_linked_documents",
+   "fieldtype": "Check",
+   "label": "Allow Sharing Linked Documents"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "description": "Create a DocShare View Log (and fire native Frappe / WhatsApp Notifications) when a guest opens a share link.",
+   "fieldname": "notify_on_view",
+   "fieldtype": "Check",
+   "label": "Track Views and Fire Notifications"
+  },
+  {
+   "default": "1",
+   "description": "Capture the guest's IP address on view. Disable if privacy regulations require it.",
+   "fieldname": "track_ip_address",
+   "fieldtype": "Check",
+   "label": "Track IP Address"
+  },
+  {
+   "fieldname": "notifications_section",
+   "fieldtype": "Section Break",
+   "label": "Notification Setup"
+  },
+  {
+   "fieldname": "notification_help",
+   "fieldtype": "HTML",
+   "options": "<div class=\"alert alert-info\">\n<p><strong>Setting up view notifications</strong></p>\n<p>DocShare uses Frappe's native Notification and WhatsApp Notification framework. When a guest opens a share link, a <strong>DocShare View Log</strong> record is created (after_insert event). Configure notifications against that doctype:</p>\n<ul>\n<li><strong>Email:</strong> Create a <a href=\"/app/notification/new\">Notification</a> with Document Type = <code>DocShare View Log</code>, Event = <code>New</code>, and recipients = <code>share_link_owner_email</code> field.</li>\n<li><strong>WhatsApp:</strong> Create a <a href=\"/app/whatsapp-notification/new\">WhatsApp Notification</a> with Reference DocType = <code>DocShare View Log</code>, Doctype Event = <code>After Insert</code>, and phone field = <code>share_link_owner_phone</code>.</li>\n</ul>\n<p>The View Log carries the resolved customer/lead/party name, IP address, and the share link owner's contact details so templates can reference them.</p>\n</div>"
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-09-06 17:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DocShare",
+ "name": "DocShare Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "amend": 0,
+   "cancel": 0,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "if_owner": 0,
+   "import": 0,
+   "permlevel": 0,
+   "print": 1,
+   "read": 1,
+   "report": 0,
+   "role": "System Manager",
+   "set_user_permissions": 0,
+   "share": 1,
+   "submit": 0,
+   "write": 1
+  }
+ ],
+ "read_only": 0,
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

@@ -1,0 +1,210 @@
+{
+ "actions": [],
+ "autoname": "DSV-.YYYY.-.####",
+ "creation": "2026-09-06 17:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "share_link",
+  "share_link_token",
+  "viewed_on",
+  "column_break_1",
+  "ip_address",
+  "country",
+  "city",
+  "user_agent",
+  "party_section",
+  "party_type",
+  "party_name",
+  "party_display_name",
+  "column_break_2",
+  "share_link_owner",
+  "share_link_owner_email",
+  "share_link_owner_phone",
+  "reference_section",
+  "ref_doctype",
+  "ref_docname"
+ ],
+ "fields": [
+  {
+   "fieldname": "share_link",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Share Link",
+   "options": "DocShare Link",
+   "read_only": 1,
+   "reqd": 0,
+   "search_index": 1,
+   "description": "Cleared when the share link is deleted — the log is kept as an audit record and identifies itself by token and shared document."
+  },
+  {
+   "fieldname": "share_link_token",
+   "fieldtype": "Data",
+   "label": "Share Token",
+   "read_only": 1,
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "default": "Today",
+   "fieldname": "viewed_on",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Viewed On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "ip_address",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "IP Address",
+   "read_only": 1
+  },
+  {
+   "fieldname": "country",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Country",
+   "read_only": 1
+  },
+  {
+   "fieldname": "city",
+   "fieldtype": "Data",
+   "label": "City",
+   "read_only": 1
+  },
+  {
+   "fieldname": "user_agent",
+   "fieldtype": "Small Text",
+   "label": "User Agent",
+   "read_only": 1
+  },
+  {
+   "fieldname": "party_section",
+   "fieldtype": "Section Break",
+   "label": "Resolved Party"
+  },
+  {
+   "fieldname": "party_type",
+   "fieldtype": "Link",
+   "label": "Party Type",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "fieldname": "party_name",
+   "fieldtype": "Dynamic Link",
+   "label": "Party",
+   "options": "party_type",
+   "read_only": 1
+  },
+  {
+   "fieldname": "party_display_name",
+   "fieldtype": "Data",
+   "label": "Party Name (Display)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "share_link_owner",
+   "fieldtype": "Link",
+   "label": "Share Link Owner",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "share_link_owner_email",
+   "fieldtype": "Data",
+   "label": "Owner Email",
+   "read_only": 1
+  },
+  {
+   "fieldname": "share_link_owner_phone",
+   "fieldtype": "Data",
+   "label": "Owner Phone",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reference_section",
+   "fieldtype": "Section Break",
+   "label": "Shared Document"
+  },
+  {
+   "fieldname": "ref_doctype",
+   "fieldtype": "Link",
+   "label": "Reference DocType",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ref_docname",
+   "fieldtype": "Dynamic Link",
+   "label": "Reference Document",
+   "options": "ref_doctype",
+   "read_only": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-09-06 17:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DocShare",
+ "name": "DocShare View Log",
+ "naming_rule": "Expression (old style)",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "amend": 0,
+   "cancel": 0,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "if_owner": 0,
+   "import": 0,
+   "permlevel": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "set_user_permissions": 0,
+   "share": 1,
+   "submit": 0,
+   "write": 0
+  },
+  {
+   "amend": 0,
+   "cancel": 0,
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "if_owner": 0,
+   "import": 0,
+   "permlevel": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Desk User",
+   "set_user_permissions": 0,
+   "share": 1,
+   "submit": 0,
+   "write": 0
+  }
+ ],
+ "read_only": 0,
+ "row_format": "Dynamic",
+ "sort_field": "viewed_on",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "share_link_token",
+ "track_views": 1
+}

@@ -1,0 +1,63 @@
+{
+ "actions": [],
+ "creation": "2026-09-06 17:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "linked_doctype",
+  "linked_docname",
+  "print_format",
+  "letterhead",
+  "no_letterhead"
+ ],
+ "fields": [
+  {
+   "fieldname": "linked_doctype",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Linked DocType",
+   "options": "DocType",
+   "reqd": 1
+  },
+  {
+   "fieldname": "linked_docname",
+   "fieldtype": "Dynamic Link",
+   "in_list_view": 1,
+   "label": "Linked Document",
+   "options": "linked_doctype",
+   "reqd": 1
+  },
+  {
+   "fieldname": "print_format",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Print Format",
+   "options": "Print Format"
+  },
+  {
+   "fieldname": "letterhead",
+   "fieldtype": "Link",
+   "label": "Letter Head",
+   "options": "Letter Head"
+  },
+  {
+   "default": "0",
+   "fieldname": "no_letterhead",
+   "fieldtype": "Check",
+   "label": "No Letterhead"
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-06 17:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DocShare",
+ "name": "DocShare Linked Document",
+ "owner": "Administrator",
+ "permissions": [],
+ "read_only": 0,
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -1,0 +1,12 @@
+/* DocShare — minimal styling for the share page and desk integration. */
+.docshare-link-row a {
+	color: #2563eb;
+	text-decoration: none;
+}
+.docshare-link-row a:hover {
+	text-decoration: underline;
+}
+.docshare-url-input[readonly] {
+	background: #ffffff;
+	cursor: text;
+}
