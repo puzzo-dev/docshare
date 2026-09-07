@@ -7,6 +7,7 @@
 	<meta http-equiv="Content-Security-Policy"
 		content="script-src 'nonce-{{ csp_nonce }}'; object-src 'none'; base-uri 'none'">
 	<title>{{ title }}</title>
+	{% if favicon %}<link rel="icon" href="{{ favicon }}">{% endif %}
 	{% if print_css %}<link rel="stylesheet" href="{{ print_css }}">{% endif %}
 	{% if document_styles %}<style>{{ document_styles | safe }}</style>{% endif %}
 	<style>
@@ -109,7 +110,31 @@
 		}
 
 		.ds-btn:hover { background: var(--ds-btn-hover); }
+
+		/* Download PDF is the action most people came for, so it is the solid
+		   one: near-black ground, white label. Hover lifts to --ds-ink-soft,
+		   which is lighter than the resting colour — the button never darkens.
+		   text-decoration is pinned across every state because this one is an
+		   <a>, and a link re-underlines itself on hover unless told not to,
+		   which is what made the filled version look broken the first time. */
+		.ds-btn-primary,
+		.ds-btn-primary:hover,
+		.ds-btn-primary:focus,
+		.ds-btn-primary:active,
+		.ds-btn-primary:visited {
+			color: #ffffff;
+			text-decoration: none;
+		}
+		.ds-btn-primary {
+			background: var(--ds-ink);
+			border-color: var(--ds-ink);
+		}
+		.ds-btn-primary:hover {
+			background: var(--ds-ink-soft);
+			border-color: var(--ds-ink-soft);
+		}
 		.ds-btn:focus-visible { outline: 2px solid var(--ds-ink-soft); outline-offset: 2px; }
+		.ds-btn:hover, .ds-btn:focus, .ds-btn:active { text-decoration: none; }
 		.ds-btn svg { width: 18px; height: 18px; margin-right: 8px; flex: none; }
 
 		/* ---- document ---------------------------------------------------- */
@@ -209,6 +234,10 @@
 				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
 				{{ _("Print") }}
 			</button>
+			<a class="ds-btn ds-btn-primary" id="ds-pdf" href="{{ pdf_url }}" rel="nofollow">
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+				{{ _("Download PDF") }}
+			</a>
 		</div>
 	</header>
 
@@ -223,6 +252,26 @@
 		document.getElementById("ds-print").addEventListener("click", function () {
 			window.print();
 		});
+
+		// Print formats hide decorative images that fail to load — a QR, a
+		// signature stamp — with an inline onerror. Those handlers are stripped
+		// before the document is embedded here, because inline script from
+		// document content has no business running on an unauthenticated page.
+		// This restores the behaviour they were there for: an image the viewer
+		// cannot reach (blocked by a tracker blocker, an offline host) leaves a
+		// gap rather than a broken-image icon.
+		Array.prototype.forEach.call(
+			document.querySelectorAll(".ds-paper img"),
+			function (img) {
+				img.addEventListener("error", function () {
+					img.style.display = "none";
+				});
+				// A cached failure can land before this listener is attached.
+				if (img.complete && img.naturalWidth === 0) {
+					img.style.display = "none";
+				}
+			}
+		);
 	</script>
 	{% endif %}
 </body>

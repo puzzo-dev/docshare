@@ -96,11 +96,18 @@ def create_share_link(
 
 	linked_rows = []
 	if linked_documents:
+		# The same document twice would render twice in the share view. The desk
+		# picker no longer sends duplicates, but this endpoint is whitelisted and
+		# a request can carry anything.
+		seen_linked = set()
 		for ld in linked_documents:
 			ld_doctype = str(ld.get("linked_doctype") or "").strip()
 			ld_docname = str(ld.get("linked_docname") or "").strip()
 			if not ld_doctype or not ld_docname:
 				continue
+			if (ld_doctype, ld_docname) in seen_linked:
+				continue
+			seen_linked.add((ld_doctype, ld_docname))
 			if not _is_shareable_doctype(ld_doctype):
 				frappe.throw(
 					_("{0} cannot be shared alongside a document.").format(ld_doctype)
@@ -167,6 +174,9 @@ def get_share_options():
 	}
 
 
+_MAX_LINKED_DOCUMENTS = 50
+
+
 @frappe.whitelist()
 def get_linked_documents_for(doctype: str, docname: str):
 	"""Return linked documents for the share popup selector.
@@ -187,21 +197,59 @@ def get_linked_documents_for(doctype: str, docname: str):
 	if not cint(_settings().share_linked_documents):
 		return []
 
-	from frappe.desk.form.linked_with import get as get_linked_docs
-
-	linked = get_linked_docs(doctype, docname)
 	result = []
-	for linked_doctype, docs in (linked or {}).items():
-		if not _is_shareable_doctype(linked_doctype):
+	seen = set()
+
+	def _add(linked_doctype, name, docstatus):
+		key = (linked_doctype, name)
+		if key in seen or docstatus == 2:
+			return
+		seen.add(key)
+		result.append({
+			"linked_doctype": linked_doctype,
+			"linked_docname": name,
+			"docstatus": docstatus,
+		})
+
+	# The document's own Connections, read the way the desk tab reads them.
+	#
+	# Only the reverse links defined in Connections. The document's own Link
+	# fields were tried too and were wrong: they pull in Customer, Company,
+	# Cost Center and Event Type — master records, not documents anyone would
+	# call a connection. Anything that matters both ways (a Quotation) already
+	# carries the reverse link, so Connections alone finds it.
+	#
+	# This used to rely on frappe.desk.form.linked_with.get, which returned
+	# nothing useful here. Its link map merges a doctype's direct link field
+	# with any child table that also carries one, and the child branch wins the
+	# elif chain — so with an event_booking field present on both Quotation and
+	# Sales Taxes and Charges, it searched the tax rows and found no Quotation.
+	# The Connections definitions are what "documents in connection" means to
+	# anyone looking at the form, so read those instead of inferring them.
+	meta = frappe.get_meta(doctype)
+	for link in (meta.links or []):
+		link_doctype = getattr(link, "link_doctype", None)
+		link_fieldname = getattr(link, "link_fieldname", None)
+		if not link_doctype or not link_fieldname:
 			continue
-		for d in docs:
-			if d.get("docstatus") == 2:
-				continue  # skip trashed
-			result.append({
-				"linked_doctype": linked_doctype,
-				"linked_docname": d.get("name"),
-				"docstatus": d.get("docstatus"),
-			})
+		if not _is_offerable_linked_doctype(link_doctype):
+			continue
+		if not frappe.has_permission(link_doctype, ptype="read"):
+			continue
+		try:
+			rows = frappe.get_list(
+				link_doctype,
+				filters={link_fieldname: docname},
+				fields=["name", "docstatus"],
+				limit_page_length=_MAX_LINKED_DOCUMENTS,
+				order_by="modified desc",
+			)
+		except Exception:
+			# A Connections entry can name a field that no longer exists.
+			continue
+		for row in rows:
+			_add(link_doctype, row.get("name"), row.get("docstatus"))
+
 	return result
 
 
@@ -370,6 +418,38 @@ def get_docshare_link_permission_query_conditions(user=None):
 # Internals
 # ---------------------------------------------------------------------------
 
+# Modules that hold framework plumbing rather than business documents.
+_INFRASTRUCTURE_MODULES = frozenset({
+	"Core", "Automation", "Email", "Social", "Workflow", "Website",
+	"Integrations", "Printing", "Desk", "Custom", "Contacts", "Geo",
+	"Data Migration",
+})
+
+
+def _is_offerable_linked_doctype(doctype: str) -> bool:
+	"""True if a doctype belongs in the linked-document picker.
+
+	Stricter than _is_shareable_doctype, and deliberately a separate question.
+	That one answers "may this be shared at all", which stays permissive — a
+	user can share whatever document they are looking at. This one answers
+	"should we suggest attaching this alongside it", where the bar is higher:
+	Comment, File and ToDo all point back at a shared document and were all
+	being offered, and a Comment can carry internal discussion that has no
+	business travelling to a customer.
+
+	Filtering by module catches the whole family at once instead of chasing
+	names one at a time, and it is applied only here so it cannot block a
+	legitimate share target.
+	"""
+	if not _is_shareable_doctype(doctype):
+		return False
+	try:
+		meta = frappe.get_meta(doctype)
+	except Exception:
+		return False
+	return getattr(meta, "module", None) not in _INFRASTRUCTURE_MODULES
+
+
 def _is_shareable_doctype(doctype: str) -> bool:
 	"""True if a doctype is a real document a customer could meaningfully read.
 
@@ -393,6 +473,11 @@ def _is_shareable_doctype(doctype: str) -> bool:
 	# Ledger/audit families. "... Entry" alone is too broad — Payment Entry and
 	# Journal Entry are real documents a customer may legitimately receive.
 	if doctype.endswith(" Ledger Entry") or doctype.endswith(" Log") or doctype == "Version":
+		return False
+
+	# Named ledger/bookkeeping doctypes the patterns above miss. "GL Entry" does
+	# not end in " Ledger Entry", and Bin/Serial No are stock internals.
+	if doctype in {"GL Entry", "Stock Ledger Entry", "Bin", "Serial No", "Batch"}:
 		return False
 
 	try:
@@ -764,6 +849,12 @@ def _print_permissions_bypassed():
 # fragment for a version nobody is viewing any more occupies memory.
 _FRAGMENT_CACHE_TTL = 600
 
+# Bump when extract_print_fragment changes what it produces. The cache key is
+# built from the document, not from this code, so without a version marker a
+# sanitiser change keeps serving fragments produced by the previous rules until
+# each document happens to be edited.
+_FRAGMENT_VERSION = 2
+
 
 def cached_print_fragment(
 	ref_doctype: str,
@@ -791,6 +882,7 @@ def cached_print_fragment(
 	"""
 	modified = frappe.db.get_value(ref_doctype, ref_docname, "modified")
 	raw = "|".join([
+		str(_FRAGMENT_VERSION),
 		ref_doctype,
 		ref_docname,
 		str(modified),
@@ -844,6 +936,28 @@ def extract_print_fragment(full_html: str) -> dict:
 		tag.decompose()
 	for tag in soup.find_all("script"):
 		tag.decompose()
+
+	# Inline event handlers and javascript: URLs, from every tag.
+	#
+	# Print formats carry these legitimately — the Avril Beetails format hides a
+	# QR and a stamp image with onerror="this.style.display='none'" — but this
+	# page is served to anyone holding the token, with no login, so any handler
+	# reaching it would be script executing from document content on a public
+	# page. That is the stored-XSS route the audit described, and stripping
+	# scripts alone never closed it.
+	#
+	# The page's Content-Security-Policy already refuses to run them, so leaving
+	# them in achieves nothing except a console full of violations and, because
+	# the blocked handler was the one that hides a failed image, a broken-image
+	# icon where the format expected nothing. share.html restores that behaviour
+	# with a nonced handler instead.
+	for tag in soup.find_all(True):
+		for attr in [a for a in tag.attrs if a.lower().startswith("on")]:
+			del tag[attr]
+		for attr in ("href", "src", "xlink:href", "action", "formaction"):
+			value = tag.get(attr)
+			if isinstance(value, str) and value.strip().lower().startswith("javascript:"):
+				del tag[attr]
 
 	# Every <style> has been collected above and the caller hoists them into
 	# <head>. Leaving the in-body copies (print formats often declare their own

@@ -135,10 +135,14 @@ docshare.ShareDialog = class ShareDialog {
 			size: "large",
 		});
 
+		// Scope for the dialog's own CSS — see docshare.bundle.css. Long share
+		// URLs and long linked-document names are the two things that can widen
+		// this dialog, and neither should ever produce a horizontal scrollbar.
+		this.dialog.$wrapper.addClass("docshare-dialog");
+
 		this.dialog.set_primary_action(__("Generate Link"), () => this.generate_link());
 		this.render_existing_links();
 		if (this.linked_docs_enabled) this.render_linked_documents();
-		else this.selected_linked_docs = [];
 		this.dialog.show();
 	}
 
@@ -150,14 +154,12 @@ docshare.ShareDialog = class ShareDialog {
 		const wrapper = this.dialog.get_field("linked_docs_html").$wrapper;
 		if (!this.linked_documents || !this.linked_documents.length) {
 			wrapper.html(`<p class="text-muted small">${__("No linked documents found.")}</p>`);
-			this.selected_linked_docs = [];
 			return;
 		}
-		this.selected_linked_docs = [];
 		const rows = this.linked_documents
 			.map(
 				(ld) => `
-			<label class="docshare-linked-doc-row" style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+			<label class="docshare-linked-doc-row" style="display:flex;align-items:center;gap:8px;padding:4px 0;min-width:0;overflow-wrap:anywhere;">
 				<input type="checkbox" class="docshare-linked-check"
 					data-doctype="${frappe.utils.escape_html(ld.linked_doctype)}"
 					data-docname="${frappe.utils.escape_html(ld.linked_docname)}">
@@ -169,19 +171,23 @@ docshare.ShareDialog = class ShareDialog {
 			<p class="text-muted small" style="margin-bottom:6px;">${__("Select linked documents to share alongside:")}</p>
 			<div>${rows}</div>
 		`);
-		wrapper.find(".docshare-linked-check").on("change", (e) => {
-			const cb = e.currentTarget;
-			if (cb.checked) {
-				this.selected_linked_docs.push({
-					linked_doctype: cb.dataset.doctype,
-					linked_docname: cb.dataset.docname,
-				});
-			} else {
-				this.selected_linked_docs = this.selected_linked_docs.filter(
-					(d) => d.linked_docname !== cb.dataset.docname
-				);
-			}
-		});
+		// No change handler: the checkboxes are the state, and selection is read
+		// from them at submit. Tracking it incrementally in an array drifted from
+		// what the user could see — re-checking a box pushed a second copy of the
+		// same document, so it rendered twice in the share view, and unchecking
+		// matched on docname alone, so it could drop a different doctype that
+		// happened to share a name.
+	}
+
+	get_selected_linked_docs() {
+		const wrapper = this.dialog.get_field("linked_docs_html").$wrapper;
+		return wrapper
+			.find(".docshare-linked-check:checked")
+			.map((_, cb) => ({
+				linked_doctype: cb.dataset.doctype,
+				linked_docname: cb.dataset.docname,
+			}))
+			.get();
 	}
 
 	render_existing_links() {
@@ -194,8 +200,8 @@ docshare.ShareDialog = class ShareDialog {
 			.map(
 				(l) => `
 			<div class="docshare-link-row" style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #eee;">
-				<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;margin-right:8px;">
-					<a href="${frappe.utils.escape_html(l.url)}" target="_blank" rel="noopener" class="small">${frappe.utils.escape_html(l.url)}</a>
+				<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;margin-right:8px;">
+					<a href="${frappe.utils.escape_html(l.url)}" target="_blank" rel="noopener" class="small" style="word-break:break-all;">${frappe.utils.escape_html(l.url)}</a>
 					<br><span class="text-muted small">${this.describe_link(l)}</span>
 				</div>
 				<button class="btn btn-xs btn-danger docshare-revoke" data-name="${frappe.utils.escape_html(l.name)}">${__("Revoke")}</button>
@@ -240,7 +246,7 @@ docshare.ShareDialog = class ShareDialog {
 				docname: this.frm.doc.name,
 				expires_on: expires_on,
 				max_views: values.max_views || null,
-				linked_documents: this.selected_linked_docs || [],
+				linked_documents: this.linked_docs_enabled ? this.get_selected_linked_docs() : [],
 			},
 			callback: (r) => {
 				if (r.message) this.show_result(r.message);
@@ -289,7 +295,7 @@ docshare.ShareDialog = class ShareDialog {
 		wrapper.html(`
 			<div style="margin-top:8px;padding:12px;background:#f8f9fa;border:1px solid #e2e8f0;border-radius:6px;">
 				<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-					<input class="form-control docshare-url-input" value="${frappe.utils.escape_html(url)}" readonly style="flex:1;">
+					<input class="form-control docshare-url-input" value="${frappe.utils.escape_html(url)}" readonly style="flex:1;min-width:0;">
 					<button class="btn btn-sm btn-primary docshare-copy">${__("Copy")}</button>
 					<a class="btn btn-sm btn-default" href="${frappe.utils.escape_html(url)}" target="_blank" rel="noopener">${__("Open")}</a>
 				</div>

@@ -87,6 +87,7 @@ class TestDocShareLink(FrappeTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
+		cls._snapshot_existing()
 		cls._cleanup_existing()
 
 	@classmethod
@@ -95,16 +96,34 @@ class TestDocShareLink(FrappeTestCase):
 		super().tearDownClass()
 
 	@classmethod
+	def _snapshot_existing(cls):
+		"""Record the links and logs that were on the site before we started."""
+		cls._preexisting_links = set(frappe.get_all("DocShare Link", pluck="name"))
+		cls._preexisting_logs = set(frappe.get_all("DocShare View Log", pluck="name"))
+
+	@classmethod
 	def _cleanup_existing(cls):
-		# View logs first: several tests commit (the guest view path commits its
-		# own counter), so logs outlive the per-test rollback while links are
-		# force-deleted and the naming series resets. A stale log then points at
-		# a link name a later test gets issued again, and that test fails for a
-		# reason that has nothing to do with what it is testing.
+		"""Remove only what this suite created.
+
+		This used to delete every DocShare Link and View Log on the site with
+		force=True. On a developer's own bench that destroys real share links
+		the moment the suite runs — which is exactly what happened — and
+		force=True also skipped the back-link check that the deletion tests
+		exist to exercise.
+
+		View logs go first: several tests commit (the guest view path commits
+		its own counter), so logs outlive the per-test rollback while links are
+		deleted and the naming series resets. A stale log then points at a link
+		name a later test is issued again, failing it for an unrelated reason.
+		"""
+		keep_logs = getattr(cls, "_preexisting_logs", set())
+		keep_links = getattr(cls, "_preexisting_links", set())
 		for name in frappe.get_all("DocShare View Log", pluck="name"):
-			frappe.delete_doc("DocShare View Log", name, force=True)
+			if name not in keep_logs:
+				frappe.delete_doc("DocShare View Log", name, force=True)
 		for name in frappe.get_all("DocShare Link", pluck="name"):
-			frappe.delete_doc("DocShare Link", name, force=True)
+			if name not in keep_links:
+				frappe.delete_doc("DocShare Link", name, force=True)
 
 	def setUp(self):
 		super().setUp()
@@ -127,7 +146,13 @@ class TestDocShareLink(FrappeTestCase):
 		self.assertTrue(url.startswith("http"))
 		self.assertIn("/share/", url)
 
-		links = frappe.get_all("DocShare Link", pluck="name")
+		# Scoped to this test's target: the suite no longer wipes the site's own
+		# share links, so unrelated links may legitimately exist alongside.
+		links = frappe.get_all(
+			"DocShare Link",
+			filters={"ref_doctype": "ToDo", "ref_docname": self.todo.name},
+			pluck="name",
+		)
 		self.assertEqual(len(links), 1)
 		doc = frappe.get_doc("DocShare Link", links[0])
 		self.assertEqual(doc.ref_doctype, "ToDo")
@@ -247,10 +272,85 @@ class TestDocShareLink(FrappeTestCase):
 		cached_print_fragment("ToDo", self.todo.name, None, None, 1, _render)
 		self.assertEqual(len(calls), 2)
 
+	def test_comments_are_not_offered_as_linked_documents(self):
+		"""A Comment points back at the shared document and used to be the only
+		thing the picker offered. It can carry internal discussion and has no
+		business being sent to a customer."""
+		from docshare.api import get_linked_documents_for
+
+		frappe.get_doc({
+			"doctype": "Comment",
+			"comment_type": "Comment",
+			"reference_doctype": "ToDo",
+			"reference_name": self.todo.name,
+			"content": "internal note",
+		}).insert(ignore_permissions=True)
+
+		offered = get_linked_documents_for("ToDo", self.todo.name)
+		self.assertFalse(
+			[o for o in offered if o["linked_doctype"] == "Comment"],
+			"Comment must never be offered in the linked-document picker",
+		)
+
+	def test_picker_and_share_target_are_separate_questions(self):
+		"""Anything may be shared; only real documents get suggested alongside."""
+		from docshare.api import _is_offerable_linked_doctype, _is_shareable_doctype
+
+		for dt in ("ToDo", "Comment", "File"):
+			self.assertTrue(_is_shareable_doctype(dt), f"{dt} should stay shareable as a target")
+			self.assertFalse(_is_offerable_linked_doctype(dt), f"{dt} should not be offered")
+
+		self.assertFalse(_is_shareable_doctype("GL Entry"), "ledger rows are never shareable")
+
+	def test_linked_documents_come_from_connections(self):
+		"""Discovery reads the doctype's Connections, which is what the form shows.
+
+		The previous implementation used frappe.desk.form.linked_with.get, whose
+		link map merges a doctype's own link field with any child table carrying
+		one — and the child branch wins, so a Quotation linked by event_booking
+		was never found because the tax-rows table also had that field.
+		"""
+		from docshare.api import get_linked_documents_for
+
+		meta = frappe.get_meta("ToDo")
+		self.assertFalse(
+			[l for l in (meta.links or []) if not l.link_fieldname],
+			"Connections entries must name the field they link on",
+		)
+		# ToDo declares no Connections, so nothing is offered — and in
+		# particular no bookkeeping row sneaks in.
+		self.assertEqual(get_linked_documents_for("ToDo", self.todo.name), [])
+
+	def test_duplicate_linked_documents_are_collapsed(self):
+		"""The same document twice would render twice in the share view.
+
+		The desk picker reads its selection from the checkboxes now, so it cannot
+		send duplicates, but this endpoint is whitelisted and a request can carry
+		anything.
+		"""
+		other = frappe.get_doc({"doctype": "ToDo", "description": "linked target"}).insert()
+		url = create_share_link(
+			doctype="ToDo",
+			docname=self.todo.name,
+			linked_documents=[
+				{"linked_doctype": "ToDo", "linked_docname": other.name},
+				{"linked_doctype": "ToDo", "linked_docname": other.name},
+			],
+		)
+		token = url.rsplit("/", 1)[-1]
+		link = frappe.get_doc("DocShare Link", frappe.db.get_value(
+			"DocShare Link", {"share_token": token}, "name"))
+		self.assertEqual(len(link.linked_documents), 1)
+		frappe.delete_doc("ToDo", other.name, force=True)
+
 	def test_share_token_is_unique(self):
 		create_share_link(doctype="ToDo", docname=self.todo.name)
 		create_share_link(doctype="ToDo", docname=self.todo.name)
-		tokens = frappe.get_all("DocShare Link", pluck="share_token")
+		tokens = frappe.get_all(
+			"DocShare Link",
+			filters={"ref_doctype": "ToDo", "ref_docname": self.todo.name},
+			pluck="share_token",
+		)
 		self.assertEqual(len(tokens), 2)
 		self.assertNotEqual(tokens[0], tokens[1])
 

@@ -10,3 +10,28 @@
 	background: #ffffff;
 	cursor: text;
 }
+
+/* Share dialog: never scroll sideways.
+ *
+ * A share URL is one long unbroken string and a linked-document label is a
+ * doctype plus a name, so both can be wider than the dialog. A flex item will
+ * not shrink below its content unless told to, which is what produced the
+ * horizontal scrollbar; these rules make that structural rather than relying
+ * on each element remembering to set min-width. */
+.docshare-dialog .modal-body {
+	overflow-x: hidden;
+}
+.docshare-dialog .modal-body * {
+	max-width: 100%;
+}
+.docshare-dialog .docshare-link-row,
+.docshare-dialog .docshare-linked-doc-row,
+.docshare-dialog .docshare-link-row > div {
+	min-width: 0;
+}
+.docshare-dialog .docshare-url-input,
+.docshare-dialog .docshare-link-row a,
+.docshare-dialog .docshare-linked-doc-row span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}

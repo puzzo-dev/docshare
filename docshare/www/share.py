@@ -69,6 +69,7 @@ def get_context(context):
 	company = _get_company(doc.ref_doctype, doc.ref_docname)
 	context.brand_logo = _get_brand_logo(company)
 	context.brand_name = _get_brand_name(company)
+	context.favicon = _get_favicon(company)
 
 	# One embeddable fragment per document — never a whole printview page.
 	context.documents = [
@@ -127,6 +128,29 @@ def _get_company(ref_doctype: str, ref_docname: str) -> str | None:
 		return frappe.defaults.get_global_default("company")
 	except Exception:
 		return None
+
+
+def _get_favicon(company: str | None) -> str | None:
+	"""Favicon for the share page, derived rather than hardcoded.
+
+	Website Settings first: that field exists to be a favicon, it is already
+	square and small, and it is what the rest of the site shows. A company logo
+	is usually a wide lockup that renders as an unreadable smear at 16px, so it
+	is only the fallback, ahead of the app logo.
+
+	Nothing is baked in — changing the favicon in Website Settings changes it
+	here too, exactly as the header logo already follows setup.
+	"""
+	try:
+		icon = frappe.db.get_single_value("Website Settings", "favicon")
+		if icon:
+			return icon
+	except Exception:
+		pass
+
+	# No site favicon configured — fall back to whatever the header is showing,
+	# so the tab at least carries the right brand.
+	return _get_brand_logo(company)
 
 
 def _get_brand_logo(company: str | None) -> str | None:
