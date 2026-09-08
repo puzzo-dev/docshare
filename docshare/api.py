@@ -323,8 +323,16 @@ def revoke_share_link(name: str):
 	if not _user_can_manage_link(doc):
 		raise frappe.PermissionError
 
-	doc.enabled = 0
-	doc.save(ignore_permissions=True)
+	# db_set, not save(). validate_target refuses a link whose target has been
+	# trashed or deleted, and save() runs validate — so revoking was impossible
+	# in exactly the situation where it matters most, and threw instead. The
+	# same reasoning is already written down for the expiry rule in
+	# validate_limits: a rule that governs creation must not make an existing
+	# link unrevokable.
+	#
+	# It is also one boolean. A full save re-validated the target, re-checked
+	# the print format and rewrote every field to flip a flag.
+	doc.db_set("enabled", 0)
 	return True
 
 
