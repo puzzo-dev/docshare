@@ -13,22 +13,33 @@
 
 /* Share dialog: never scroll sideways.
  *
- * A share URL is one long unbroken string and a linked-document label is a
- * doctype plus a name, so both can be wider than the dialog. A flex item will
- * not shrink below its content unless told to, which is what produced the
- * horizontal scrollbar; these rules make that structural rather than relying
- * on each element remembering to set min-width. */
+ * Every Frappe dialog is built by frappe.get_modal() as
+ * `.modal-dialog.modal-dialog-scrollable`, and Bootstrap 4 styles that as:
+ *
+ *     .modal-dialog-scrollable .modal-content { overflow: hidden; }
+ *     .modal-dialog-scrollable .modal-body    { overflow-y: auto; }
+ *
+ * The second rule is the trap. Per CSS Overflow 3, when one axis is not
+ * `visible` the other computes from `visible` to `auto` — so setting only
+ * overflow-y turns .modal-body into a scroll container on BOTH axes. The
+ * horizontal bar is invisible until something inside is a pixel too wide, and
+ * then it appears across the full width of the dialog.
+ *
+ * A share dialog is exactly the place that happens: a share URL is one long
+ * unbreakable token, and a linked-document label is a doctype plus a name.
+ * Naming the axis explicitly removes it, whatever the widest child turns out
+ * to be — which is why this is the whole fix and not a per-element chase.
+ *
+ * Deliberately NOT on .modal-content: Bootstrap already sets `overflow: hidden`
+ * there, and adding overflow-x alone to an element whose overflow-y is
+ * `visible` would spring the very same trap in the other direction. */
 .docshare-dialog .modal-body {
 	overflow-x: hidden;
 }
-.docshare-dialog .modal-body * {
-	max-width: 100%;
-}
-.docshare-dialog .docshare-link-row,
-.docshare-dialog .docshare-linked-doc-row,
-.docshare-dialog .docshare-link-row > div {
-	min-width: 0;
-}
+
+/* Belt and braces for the two strings that can actually be too wide. A flex
+ * item defaults to min-width:auto and so refuses to shrink below its content;
+ * these give it permission to, and let an unbreakable URL break. */
 .docshare-dialog .docshare-url-input,
 .docshare-dialog .docshare-link-row a,
 .docshare-dialog .docshare-linked-doc-row span {
