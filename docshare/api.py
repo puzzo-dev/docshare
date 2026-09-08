@@ -164,6 +164,7 @@ def create_share_link(
 		"linked_documents": linked_rows,
 	})
 	doc.insert(ignore_permissions=True)
+	_forget_shared_doctypes()
 
 	return _build_share_url(doc.share_token)
 
@@ -385,6 +386,29 @@ def download_shared_pdf(token: str):
 # Document event hook
 # ---------------------------------------------------------------------------
 
+_SHARED_DOCTYPES_TTL = 300
+
+
+def _doctype_has_share_links(doctype: str) -> bool:
+	"""True if any share link points at this doctype. Cached briefly.
+
+	Fails open: if the cache or the query cannot answer, the caller does the
+	work it would have done anyway. Missing the disable is worse than an extra
+	query.
+	"""
+	key = "docshare:shared_doctypes"
+	try:
+		shared = frappe.cache.get_value(key, expires=True)
+		if shared is None:
+			shared = frappe.get_all(
+				"DocShare Link", filters={"enabled": 1}, pluck="ref_doctype", distinct=True
+			)
+			frappe.cache.set_value(key, shared, expires_in_sec=_SHARED_DOCTYPES_TTL)
+		return doctype in (shared or [])
+	except Exception:
+		return True
+
+
 def on_document_trash(doc, method=None):
 	"""Auto-disable DocShare Links when the target document is trashed.
 
@@ -392,6 +416,15 @@ def on_document_trash(doc, method=None):
 	"""
 	if not doc or not doc.doctype or not doc.name:
 		return
+
+	# This fires on every trash of every doctype on the site, and most sites
+	# never share most doctypes — so the common case was an UPDATE against
+	# DocShare Link for a document that could not possibly have one. The set of
+	# shared doctypes is small and changes rarely, so it is worth knowing before
+	# touching the table at all.
+	if not _doctype_has_share_links(doc.doctype):
+		return
+
 	try:
 		frappe.db.set_value(
 			"DocShare Link",
@@ -923,6 +956,20 @@ def _take_guest_slot(key: str, ceiling: int) -> bool:
 		return True
 
 	return not (count and count > ceiling)
+
+
+def _forget_shared_doctypes() -> None:
+	"""Drop the shared-doctype set — call whenever a link is created.
+
+	on_document_trash consults that set before touching the table, so a doctype
+	shared for the first time must not fall inside a stale window: the link
+	would stay enabled after its target was trashed, which is the one thing
+	that hook exists to prevent.
+	"""
+	try:
+		frappe.cache.delete_value("docshare:shared_doctypes")
+	except Exception:
+		pass
 
 
 def _default_expiry():
