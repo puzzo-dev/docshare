@@ -18,7 +18,7 @@ import hashlib
 
 import frappe
 from frappe import _
-from frappe.utils import cint, get_datetime, get_system_timezone, now_datetime
+from frappe.utils import add_days, cint, get_datetime, get_system_timezone, now_datetime
 
 
 # ---------------------------------------------------------------------------
@@ -28,6 +28,8 @@ from frappe.utils import cint, get_datetime, get_system_timezone, now_datetime
 # Rate limit for guest endpoints: 60 requests per hour per IP.
 GUEST_RATE_LIMIT_MAX = 60
 GUEST_RATE_LIMIT_WINDOW = 3600
+# The backstop for a forged X-Forwarded-For — see enforce_guest_rate_limit.
+GUEST_RATE_LIMIT_SITE_MAX = 3000
 
 # Generic error shown for invalid / expired / exhausted / disabled links.
 GENERIC_INVALID_MESSAGE = _("This share link is no longer available.")
@@ -67,6 +69,13 @@ def create_share_link(
 
 	# Permission check on the target document — not merely role membership.
 	if not frappe.has_permission(doctype, ptype="read", doc=docname, user=frappe.session.user):
+		raise frappe.PermissionError
+
+	# And print, because that is what a share link publishes. The docstring
+	# already said read/print; only read was ever checked, so a role given read
+	# but deliberately denied print could still put the document's full printed
+	# form on a URL that needs no login at all.
+	if not frappe.has_permission(doctype, ptype="print", doc=docname, user=frappe.session.user):
 		raise frappe.PermissionError
 
 	meta = frappe.get_meta(doctype)
@@ -149,7 +158,7 @@ def create_share_link(
 		"print_format": None,
 		"letterhead": None,
 		"no_letterhead": 0,
-		"expires_on": _normalize_expiry(expires_on),
+		"expires_on": _normalize_expiry(expires_on) or _default_expiry(),
 		"max_views": _normalize_max_views(max_views),
 		"enabled": 1,
 		"linked_documents": linked_rows,
@@ -861,23 +870,69 @@ def enforce_guest_rate_limit(scope: str = "view") -> None:
 	if not ip:
 		return
 
-	key = frappe.cache.make_key(f"docshare:ratelimit:{scope}:{ip}")
-	try:
-		pipe = frappe.cache.pipeline()
-		pipe.incr(key)
-		pipe.ttl(key)
-		count, ttl = pipe.execute()
-		if ttl is None or ttl < 0:
-			frappe.cache.expire(key, GUEST_RATE_LIMIT_WINDOW)
-	except Exception:
-		# A cache outage must not take the share page down with it.
-		return
-
-	if count and count > GUEST_RATE_LIMIT_MAX:
+	# Per IP, and then per site.
+	#
+	# request_ip comes from X-Forwarded-For when the site sits behind a proxy,
+	# and a caller who can set that header can present a different address on
+	# every request — which makes a purely per-IP counter something an attacker
+	# opts out of. Whether the header is trustworthy depends on the proxy in
+	# front of the bench, which this app cannot know, so the per-IP limit stays
+	# as the fair-use control it is and a site-wide ceiling backs it: forging
+	# the header spreads the load across counters but cannot take the total past
+	# what one site is allowed to spend on guests.
+	#
+	# The ceiling is deliberately generous. It is not there to shape normal
+	# traffic — the per-IP limit does that — only to bound the worst case.
+	if not _take_guest_slot(f"docshare:ratelimit:{scope}:{ip}", GUEST_RATE_LIMIT_MAX):
 		frappe.throw(
 			_("Too many requests. Please try again later."),
 			frappe.TooManyRequestsError,
 		)
+
+	if not _take_guest_slot(f"docshare:ratelimit:all:{scope}", GUEST_RATE_LIMIT_SITE_MAX):
+		frappe.throw(
+			_("This document is receiving too many requests. Please try again later."),
+			frappe.TooManyRequestsError,
+		)
+
+
+def _take_guest_slot(key: str, ceiling: int) -> bool:
+	"""Count one request against *key*. False once the window is over *ceiling*.
+
+	INCR and EXPIRE are pipelined so there is no window in which a counter
+	exists without a TTL. A cache outage must not take the share page down, so
+	it counts as allowed.
+	"""
+	full_key = frappe.cache.make_key(key)
+	try:
+		pipe = frappe.cache.pipeline()
+		pipe.incr(full_key)
+		pipe.ttl(full_key)
+		count, ttl = pipe.execute()
+		if ttl is None or ttl < 0:
+			frappe.cache.expire(full_key, GUEST_RATE_LIMIT_WINDOW)
+	except Exception:
+		return True
+
+	return not (count and count > ceiling)
+
+
+def _default_expiry():
+	"""The configured default expiry, as an absolute datetime, or None.
+
+	DocShare Settings.default_expiry_days was handed to the client to prefill
+	the dialog and never applied by the server, so it governed the form and
+	nothing else: a caller that omitted the field — this endpoint is
+	whitelisted — got a link that never expires, which is precisely the setting
+	saying it should. Applied only when the caller named no expiry of their own.
+	"""
+	try:
+		days = cint(_settings().default_expiry_days)
+	except Exception:
+		return None
+	if days <= 0:
+		return None
+	return add_days(now_datetime(), days)
 
 
 def _settings():
