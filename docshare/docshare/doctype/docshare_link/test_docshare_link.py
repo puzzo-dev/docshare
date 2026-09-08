@@ -5,7 +5,10 @@ from contextlib import contextmanager
 
 import frappe
 import frappe.utils
-from frappe.tests.utils import FrappeTestCase
+try:  # Frappe v16 and later — frappe.tests.utils was removed
+	from frappe.tests import IntegrationTestCase as FrappeTestCase
+except ImportError:  # Frappe v15
+	from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_days, now_datetime
 
 from docshare.api import (

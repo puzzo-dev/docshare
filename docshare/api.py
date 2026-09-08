@@ -1013,9 +1013,9 @@ def _render_print_pdf(doc) -> bytes:
 	``get_pdf`` on pre-rendered HTML, so each print format's own pdf_generator
 	and page settings are honoured.
 	"""
-	from pypdf import PdfWriter
+	from io import BytesIO
 
-	from frappe.utils.print_format import read_multi_pdf
+	from pypdf import PdfWriter
 
 	writer = PdfWriter()
 	with _print_permissions_bypassed():
@@ -1030,7 +1030,12 @@ def _render_print_pdf(doc) -> bytes:
 				letterhead=letterhead,
 			)
 
-	return read_multi_pdf(writer)
+	# frappe.utils.print_format.read_multi_pdf is deprecated in v16 and goes in
+	# v17, and it is three lines: write the merged writer into a buffer and hand
+	# back the bytes. Inlined rather than left to warn now and break later.
+	with BytesIO() as merged:
+		writer.write(merged)
+		return merged.getvalue()
 
 
 def _linked_document_renderable(ld) -> bool:
