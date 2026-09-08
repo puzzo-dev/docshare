@@ -4,8 +4,21 @@
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<meta name="robots" content="noindex, nofollow">
+	{#
+		The share token is in the URL, so the URL is the credential. Any external
+		resource a print format pulls in — an image, a webfont, a stylesheet —
+		sends the whole address in the Referer header to whoever serves it, which
+		hands that third party a working link to the customer's document. Print
+		formats are user-editable HTML, so this is not hypothetical.
+	#}
+	<meta name="referrer" content="no-referrer">
+	{#
+		form-action stops a print format posting this page somewhere, and
+		frame-ancestors stops it being framed for clickjacking. Scripts were
+		already nonce-gated.
+	#}
 	<meta http-equiv="Content-Security-Policy"
-		content="script-src 'nonce-{{ csp_nonce }}'; object-src 'none'; base-uri 'none'">
+		content="script-src 'nonce-{{ csp_nonce }}'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
 	<title>{{ title }}</title>
 	{% if favicon %}<link rel="icon" href="{{ favicon }}">{% endif %}
 	{% if print_css %}<link rel="stylesheet" href="{{ print_css }}">{% endif %}
