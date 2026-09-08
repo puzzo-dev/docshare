@@ -36,7 +36,7 @@
    "read_only": 1,
    "reqd": 0,
    "search_index": 1,
-   "description": "Cleared when the share link is deleted — the log is kept as an audit record and identifies itself by token and shared document."
+   "description": "Cleared when the share link is deleted \u2014 the log is kept as an audit record and identifies itself by token and shared document."
   },
   {
    "fieldname": "share_link_token",
@@ -175,25 +175,6 @@
    "read": 1,
    "report": 1,
    "role": "System Manager",
-   "set_user_permissions": 0,
-   "share": 1,
-   "submit": 0,
-   "write": 0
-  },
-  {
-   "amend": 0,
-   "cancel": 0,
-   "create": 1,
-   "delete": 0,
-   "email": 1,
-   "export": 1,
-   "if_owner": 0,
-   "import": 0,
-   "permlevel": 0,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "Desk User",
    "set_user_permissions": 0,
    "share": 1,
    "submit": 0,

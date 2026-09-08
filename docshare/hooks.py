@@ -49,10 +49,12 @@ doc_events = {
 # referenced target document. See docshare.api for the implementation.
 has_permission = {
 	"DocShare Link": "docshare.api.has_docshare_link_permission",
+	"DocShare View Log": "docshare.api.has_docshare_view_log_permission",
 }
 
 permission_query_conditions = {
 	"DocShare Link": "docshare.api.get_docshare_link_permission_query_conditions",
+	"DocShare View Log": "docshare.api.get_docshare_view_log_permission_query_conditions",
 }
 
 # Apps

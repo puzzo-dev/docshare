@@ -96,6 +96,24 @@ def create_share_link(
 
 	linked_rows = []
 	if linked_documents:
+		# The cap the picker already applies when it *offers* linked documents
+		# was never applied when accepting them. This endpoint is whitelisted,
+		# so a crafted request could attach any number: each one costs a
+		# permission check and a lookup here, a print render on every view of
+		# the share page, and — on the PDF download — its own wkhtmltopdf
+		# process. A few thousand entries in one call is a denial of service
+		# that any user with share rights could mount.
+		#
+		# Refused rather than truncated: silently dropping documents the sender
+		# chose would produce a share that is missing pages nobody can account
+		# for.
+		if len(linked_documents) > _MAX_LINKED_DOCUMENTS:
+			frappe.throw(
+				_("A share can include at most {0} linked documents.").format(
+					_MAX_LINKED_DOCUMENTS
+				)
+			)
+
 		# The same document twice would render twice in the share view. The desk
 		# picker no longer sends duplicates, but this endpoint is whitelisted and
 		# a request can carry anything.
@@ -389,6 +407,43 @@ def has_docshare_link_permission(doc, ptype="read", user=None):
 		return frappe.has_permission(doc.ref_doctype, ptype="read", doc=doc.ref_docname, user=user)
 	except frappe.PermissionError:
 		return False
+
+
+def has_docshare_view_log_permission(doc, ptype="read", user=None):
+	"""has_permission hook for DocShare View Log.
+
+	A view log carries `share_link_token` — the bearer credential for the
+	public /share/<token> URL — alongside the viewer's IP, city, user agent and
+	the link owner's email and phone. The doctype used to grant read to the
+	`Desk User` role, which is every internal user: anyone could list the logs,
+	lift a token and open, or forward, any customer's shared document without
+	logging in at all. Verified on a live site before the role was removed.
+
+	With that role gone the doctype is System Manager only, which would take the
+	logs away from the people they are actually for. This hands them back to the
+	one person entitled to them: whoever created the share link.
+	"""
+	if user is None:
+		user = frappe.session.user
+	if user == "Administrator" or "System Manager" in frappe.get_roles(user):
+		return True
+	if not doc:
+		return None
+	return getattr(doc, "share_link_owner", None) == user
+
+
+def get_docshare_view_log_permission_query_conditions(user=None):
+	"""Scope DocShare View Log lists to the links the user owns.
+
+	The has_permission hook governs a single document; a list query never
+	reaches it, so without this a report view would still expose every token on
+	the site to anyone the role permissions let in.
+	"""
+	if user is None:
+		user = frappe.session.user
+	if user == "Administrator" or "System Manager" in frappe.get_roles(user):
+		return ""
+	return f"""`tabDocShare View Log`.share_link_owner = {frappe.db.escape(user)}"""
 
 
 def get_docshare_link_permission_query_conditions(user=None):
