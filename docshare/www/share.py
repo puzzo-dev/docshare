@@ -67,9 +67,13 @@ def get_context(context):
 	# out for itself, costing two meta lookups and two Company reads to render
 	# one header line.
 	company = _get_company(doc.ref_doctype, doc.ref_docname)
-	context.brand_logo = _get_brand_logo(company)
-	context.brand_name = _get_brand_name(company)
-	context.favicon = _get_favicon(company)
+	# Cached per company. Each of these reads Website Settings or the Company
+	# record, and all three ran on every guest view of every link — for values
+	# that change when someone edits branding, which is to say almost never.
+	brand = _brand_for(company)
+	context.brand_logo = brand["logo"]
+	context.brand_name = brand["name"]
+	context.favicon = brand["favicon"]
 
 	# One embeddable fragment per document — never a whole printview page.
 	context.documents = [
@@ -128,6 +132,35 @@ def _get_company(ref_doctype: str, ref_docname: str) -> str | None:
 		return frappe.defaults.get_global_default("company")
 	except Exception:
 		return None
+
+
+_BRAND_TTL = 3600
+
+
+def _brand_for(company: str | None) -> dict:
+	"""Logo, name and favicon for the share page, cached for an hour.
+
+	Fails open: a cache that cannot answer just does the reads, which is what
+	happened on every request before.
+	"""
+	key = f"docshare:brand:{company or ''}"
+	try:
+		cached = frappe.cache.get_value(key, expires=True)
+		if cached:
+			return cached
+	except Exception:
+		cached = None
+
+	brand = {
+		"logo": _get_brand_logo(company),
+		"name": _get_brand_name(company),
+		"favicon": _get_favicon(company),
+	}
+	try:
+		frappe.cache.set_value(key, brand, expires_in_sec=_BRAND_TTL)
+	except Exception:
+		pass
+	return brand
 
 
 def _get_favicon(company: str | None) -> str | None:

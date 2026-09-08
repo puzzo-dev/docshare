@@ -194,7 +194,13 @@ def get_share_options():
 
 	The dialog cannot decide whether to render the Linked Documents selector, or
 	which expiry preset to pre-select, without knowing DocShare Settings.
+
+	Gated on being able to create a share link at all. It is only two
+	configuration flags, but they were handed to any logged-in user including
+	ones with no share rights, and a setting is a fact about how the site is
+	run.
 	"""
+	frappe.has_permission("DocShare Link", "create", throw=True)
 	settings = _settings()
 	return {
 		"share_linked_documents": cint(settings.share_linked_documents),
@@ -742,9 +748,38 @@ def _increment_view_count(name: str):
 			f"view count not recorded for {name}: {frappe.get_traceback(with_context=False)}"
 		)
 
-	# Create a View Log — this fires native Notification (event="New")
-	# and WhatsApp Notification (doctype_event="After Insert") on insert.
-	_log_view(name)
+	# Off the request. The View Log's before_insert resolves the party from the
+	# target document, reads the link owner's User and Contact records, and does
+	# a GeoLite2 lookup on the visitor's IP — all of it between the customer
+	# clicking the link and the page arriving. None of it is something the
+	# visitor is waiting for: it exists to fire notifications, which are
+	# asynchronous anyway.
+	#
+	# `now` in tests, because enqueue only runs inline there when asked, and the
+	# suite asserts the log exists straight after a view.
+	in_test = bool(frappe.flags.in_test)
+	frappe.enqueue(
+		"docshare.api.log_view_job",
+		queue="short",
+		# after-commit in production so the job cannot observe a transaction
+		# that later rolls back; inline in tests, which roll back deliberately
+		# and would otherwise never see the job run at all.
+		enqueue_after_commit=not in_test,
+		now=in_test,
+		share_link_name=name,
+		request_ip=getattr(frappe.local, "request_ip", None),
+	)
+
+
+def log_view_job(share_link_name: str, request_ip: str | None = None):
+	"""Background entry point for view logging.
+
+	The IP travels with the job: the worker has no request behind it, and the
+	visitor's address is the one thing the log cannot work out for itself.
+	"""
+	if request_ip:
+		frappe.local.request_ip = request_ip
+	_log_view(share_link_name)
 
 
 def _has_view_notification_consumer() -> bool:
@@ -757,12 +792,16 @@ def _has_view_notification_consumer() -> bool:
 	So "Notify on View" stays inert until a consumer exists, rather than
 	generating records on its own authority.
 	"""
-	# Deliberately not memoised on frappe.local. That saves one indexed exists()
-	# per page view, but frappe.local outlives a whole worker job or test run,
-	# so a cached False would silently stop writing the audit log for every
-	# subsequent view once someone added a Notification. Not a trade worth
-	# making for a single cheap lookup — unlike the batched settings toggle in
-	# event_bookings, there is nothing here to amortise it across.
+	# Not cached, and the audit finding that asked for it was tried and
+	# reverted. Caching the answer means a stored False keeps the audit log from
+	# being written after someone adds a Notification — for however long the
+	# entry lives. A one-minute TTL bounds that but does not remove it, and the
+	# test suite caught it immediately: a consumer created mid-test was ignored
+	# because the previous answer was still cached.
+	#
+	# It is two indexed exists() on a path that now does its real work in a
+	# background job, so there is very little left to save and a correctness
+	# risk to take for it.
 	if frappe.db.exists("Notification", {"document_type": VIEW_LOG_DOCTYPE, "enabled": 1}):
 		return True
 
@@ -946,12 +985,22 @@ def _take_guest_slot(key: str, ceiling: int) -> bool:
 	"""
 	full_key = frappe.cache.make_key(key)
 	try:
-		pipe = frappe.cache.pipeline()
-		pipe.incr(full_key)
-		pipe.ttl(full_key)
-		count, ttl = pipe.execute()
-		if ttl is None or ttl < 0:
-			frappe.cache.expire(full_key, GUEST_RATE_LIMIT_WINDOW)
+		# INCR then a conditional EXPIRE was two round trips on every request
+		# and three on the first of each window. Redis sets the TTL only when
+		# the counter is new, in one call, so the window is never left without
+		# one and the common path is a single command.
+		count = frappe.cache.eval(
+			"""
+			local count = redis.call('INCR', KEYS[1])
+			if count == 1 then
+			  redis.call('EXPIRE', KEYS[1], ARGV[1])
+			end
+			return count
+			""",
+			1,
+			full_key,
+			GUEST_RATE_LIMIT_WINDOW,
+		)
 	except Exception:
 		return True
 
@@ -1236,9 +1285,12 @@ def _linked_document_renderable(ld) -> bool:
 	"""
 	if not ld or not ld.linked_doctype or not ld.linked_docname:
 		return False
-	if not frappe.db.exists(ld.linked_doctype, ld.linked_docname):
-		return False
-	return frappe.db.get_value(ld.linked_doctype, ld.linked_docname, "docstatus") != 2
+
+	# One read, not two. get_value returns None for a document that is not
+	# there, so the exists() that preceded it was asking a question its own
+	# answer already contained — once per linked document, on every render.
+	docstatus = frappe.db.get_value(ld.linked_doctype, ld.linked_docname, "docstatus")
+	return docstatus is not None and docstatus != 2
 
 
 def _render_linked_document_html(ld) -> str | None:
@@ -1261,10 +1313,21 @@ def _render_linked_document_html(ld) -> str | None:
 		)
 
 
+_FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
 def _pdf_filename(doc) -> str:
-	"""Build a friendly PDF filename for a shared document."""
-	safe_name = str(doc.ref_docname).replace(" ", "_").replace("/", "-")
-	return f"{doc.ref_doctype}-{safe_name}.pdf"
+	"""Build a friendly PDF filename for a shared document.
+
+	Spaces and slashes were the only characters replaced, which left quotes,
+	semicolons, newlines and backslashes to go straight into the
+	Content-Disposition header a browser then parses. Document names are
+	user-controlled — a naming series is not, but an amended or renamed
+	document can be — so the safe set is stated positively instead: letters,
+	digits, dot, underscore and hyphen, everything else collapsed.
+	"""
+	stem = _FILENAME_SAFE.sub("_", f"{doc.ref_doctype}-{doc.ref_docname}").strip("._-")
+	return f"{stem or 'document'}.pdf"
 
 
 def _user_can_manage_link(doc) -> bool:
