@@ -332,9 +332,23 @@ def get_shared_document(token: str):
 	"""
 	enforce_guest_rate_limit("view")
 	doc = _validate_guest_token(token)
-	html = _render_print_html(doc)
+
+	# The same sanitised, cached fragment the share page serves — not the raw
+	# printview. This returned frappe.get_print's whole document, scripts and
+	# all, to an allow_guest endpoint: a print format carrying script (they are
+	# user-editable HTML) executed in whatever page embedded the result, and
+	# nothing stripped inline handlers or javascript: hrefs the way
+	# extract_print_fragment does for the share page itself.
+	#
+	# Going through the cache also stops each call spawning a full printview
+	# render, which on a guest endpoint is a lever of its own.
+	fragment = cached_print_fragment(
+		doc.ref_doctype, doc.ref_docname, doc.print_format,
+		doc.letterhead, doc.no_letterhead,
+		lambda: _render_print_html(doc),
+	)
 	_increment_view_count(doc.name)
-	return html
+	return fragment.get("html", "")
 
 
 @frappe.whitelist(allow_guest=True)
@@ -902,7 +916,12 @@ def _print_permissions_bypassed():
 # How long a rendered fragment is held. The key already carries the document's
 # `modified`, so an edit invalidates immediately and this only bounds how long a
 # fragment for a version nobody is viewing any more occupies memory.
-_FRAGMENT_CACHE_TTL = 600
+# A day, not ten minutes. The key carries the document's `modified`, so an edit
+# changes the key and a stale fragment can never be served — the TTL is only
+# deciding how often an *unchanged* document pays for a full printview render
+# and a BeautifulSoup parse of it. At ten minutes a link opened through the day
+# re-rendered it constantly for no benefit.
+_FRAGMENT_CACHE_TTL = 86400
 
 # Bump when extract_print_fragment changes what it produces. The cache key is
 # built from the document, not from this code, so without a version marker a
@@ -935,7 +954,12 @@ def cached_print_fragment(
 	Cached content is a fully rendered document, so the key is site-scoped
 	through make_key exactly as the rest of the app's cache use is.
 	"""
-	modified = frappe.db.get_value(ref_doctype, ref_docname, "modified")
+	# get_cached_value, not db.get_value: this runs before the cache lookup, so
+	# a plain read meant a database round trip on every *hit* — the cost the
+	# cache exists to avoid, paid on the path that was supposed to be free.
+	# Frappe serves this from Redis and invalidates it when the document is
+	# saved, which is exactly the invalidation the key already relies on.
+	modified = frappe.get_cached_value(ref_doctype, ref_docname, "modified")
 	raw = "|".join([
 		str(_FRAGMENT_VERSION),
 		ref_doctype,

@@ -30,6 +30,18 @@ class DocShareViewLog(Document):
 		"""
 		if not self.ref_doctype or not self.ref_docname:
 			return
+
+		# The columns first, the document only if they do not answer it.
+		#
+		# This ran on every view of every share link and always loaded the whole
+		# target — a Sales Invoice with all of its item, tax and payment child
+		# tables — to read at most three scalar fields off it. The fields it
+		# wants are plain columns on the parent, so a single row read answers
+		# almost every case, and the existence probe that preceded it becomes
+		# redundant: a missing document returns nothing.
+		if self._resolve_party_from_columns():
+			return
+
 		if not frappe.db.exists(self.ref_doctype, self.ref_docname):
 			return
 
@@ -68,6 +80,51 @@ class DocShareViewLog(Document):
 					display = doc.get(fname)
 					break
 			self.party_display_name = display
+
+	def _resolve_party_from_columns(self) -> bool:
+		"""Read the party straight off the target's row. True if it answered.
+
+		Only fields the target's meta actually has are requested — asking for a
+		column that does not exist is an error, not an empty answer.
+		"""
+		try:
+			meta = frappe.get_meta(self.ref_doctype)
+		except Exception:
+			return False
+
+		candidates = (
+			"customer", "customer_name", "supplier", "supplier_name",
+			"party_type", "party", "party_name", "lead_name",
+			"quotation_to", "opportunity_from",
+		)
+		fields = [f for f in candidates if meta.get_field(f)]
+		if not fields:
+			return False
+
+		row = frappe.db.get_value(self.ref_doctype, self.ref_docname, fields, as_dict=True)
+		if not row:
+			return False
+
+		if row.get("customer"):
+			party_type, party = "Customer", row["customer"]
+		elif row.get("supplier"):
+			party_type, party = "Supplier", row["supplier"]
+		elif row.get("party_type") and row.get("party"):
+			party_type, party = row["party_type"], row["party"]
+		elif row.get("quotation_to") and row.get("party_name"):
+			party_type, party = row["quotation_to"], row["party_name"]
+		elif row.get("opportunity_from") and row.get("party_name"):
+			party_type, party = row["opportunity_from"], row["party_name"]
+		else:
+			return False
+
+		self.party_type = party_type
+		self.party_name = party
+		self.party_display_name = (
+			row.get("customer_name") or row.get("supplier_name")
+			or row.get("lead_name") or party
+		)
+		return True
 
 	def _resolve_owner_details(self):
 		"""Resolve the share link owner's email and phone for notification templates."""
