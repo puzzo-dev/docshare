@@ -1282,7 +1282,7 @@ _FRAGMENT_CACHE_TTL = 86400
 # built from the document, not from this code, so without a version marker a
 # sanitiser change keeps serving fragments produced by the previous rules until
 # each document happens to be edited.
-_FRAGMENT_VERSION = 2
+_FRAGMENT_VERSION = 3
 
 
 def cached_print_fragment(
