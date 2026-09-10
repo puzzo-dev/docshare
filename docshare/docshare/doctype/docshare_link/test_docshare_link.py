@@ -306,23 +306,87 @@ class TestDocShareLink(FrappeTestCase):
 		self.assertFalse(_is_shareable_doctype("GL Entry"), "ledger rows are never shareable")
 
 	def test_linked_documents_come_from_connections(self):
-		"""Discovery reads the doctype's Connections, which is what the form shows.
+		"""Discovery finds every doctype that references this one, not just
+		what the Connections tab declares.
 
-		The previous implementation used frappe.desk.form.linked_with.get, whose
-		link map merges a doctype's own link field with any child table carrying
-		one — and the child branch wins, so a Quotation linked by event_booking
-		was never found because the tax-rows table also had that field.
+		The picker uses ``get_linked_doctypes``, which scans every DocField
+		and Custom Field for Link/Dynamic Link fields pointing at the
+		target doctype. ToDo has no incoming links from any transactional
+		document, so nothing is offered — and in particular no bookkeeping
+		row sneaks in.
 		"""
 		from docshare.api import get_linked_documents_for
 
-		meta = frappe.get_meta("ToDo")
-		self.assertFalse(
-			[l for l in (meta.links or []) if not l.link_fieldname],
-			"Connections entries must name the field they link on",
-		)
-		# ToDo declares no Connections, so nothing is offered — and in
-		# particular no bookkeeping row sneaks in.
+		# ToDo has no incoming links from transactional doctypes, so nothing
+		# is offered.
 		self.assertEqual(get_linked_documents_for("ToDo", self.todo.name), [])
+
+	def test_linked_documents_read_dashboard_py_connections(self):
+		"""Linked-document discovery finds links declared in ``_dashboard.py``,
+		not just ``meta.links``.
+
+		Standard ERPNext doctypes (Quotation, Sales Invoice, Sales Order,
+		Payment Entry, …) define their Connections in ``_dashboard.py`` via
+		``non_standard_fieldnames`` / ``internal_links``, leaving the
+		``links`` array on the DocType JSON empty. The comprehensive
+		discovery uses ``get_linked_doctypes`` which scans all DocFields,
+		so it finds these regardless of whether they are declared in a
+		dashboard.
+		"""
+		from docshare.api import get_linked_documents_for
+		from erpnext.selling.doctype.quotation.test_quotation import make_quotation
+
+		# Quotation is the canonical case: its ``links`` array is empty but
+		# Sales Order references it via ``prevdoc_docname`` on Sales Order
+		# Item (a child-table field). The picker must find this through
+		# ``get_linked_doctypes`` and resolve it through the child table.
+		meta = frappe.get_meta("Quotation")
+		self.assertFalse(meta.links, "Quotation must have empty meta.links")
+
+		# Create a Quotation, then a Sales Order referencing it. The Sales Order
+		# should appear as a linked document of the Quotation.
+		quote = make_quotation(do_not_submit=True)
+		try:
+			# Before the fix this returned [] regardless of linked documents,
+			# because Quotation.meta.links is empty and Sales Order was never
+			# in the candidate set.
+			self.assertEqual(
+				get_linked_documents_for("Quotation", quote.name), [],
+				"fresh Quotation with no Sales Order must offer nothing",
+			)
+
+			# Create a Sales Order whose items reference the Quotation via
+			# prevdoc_docname — the standard ERPNext link field.
+			so = frappe.get_doc({
+				"doctype": "Sales Order",
+				"customer": "_Test Customer",
+				"company": "_Test Company",
+				"currency": "INR",
+				"delivery_date": frappe.utils.add_days(frappe.utils.today(), 10),
+				"items": [{
+					"item_code": "_Test Item",
+					"qty": 1,
+					"rate": 100,
+					"warehouse": "_Test Warehouse - _TC",
+					"prevdoc_docname": quote.name,
+				}],
+			})
+			so.insert(ignore_permissions=True)
+			try:
+				offered = get_linked_documents_for("Quotation", quote.name)
+				linked_types = {o["linked_doctype"] for o in offered}
+				self.assertIn(
+					"Sales Order", linked_types,
+					"Sales Order linked via child-table field must be offered",
+				)
+				# And the specific row.
+				so_rows = [o for o in offered if o["linked_doctype"] == "Sales Order"]
+				self.assertEqual(len(so_rows), 1)
+				self.assertEqual(so_rows[0]["linked_docname"], so.name)
+			finally:
+				frappe.delete_doc("Sales Order", so.name, force=True, ignore_permissions=True)
+		finally:
+			frappe.delete_doc("Quotation", quote.name, force=True, ignore_permissions=True)
 
 	def test_duplicate_linked_documents_are_collapsed(self):
 		"""The same document twice would render twice in the share view.
@@ -345,6 +409,64 @@ class TestDocShareLink(FrappeTestCase):
 			"DocShare Link", {"share_token": token}, "name"))
 		self.assertEqual(len(link.linked_documents), 1)
 		frappe.delete_doc("ToDo", other.name, force=True)
+
+	def test_outgoing_links_are_offered(self):
+		"""Documents this one points at via Link and Dynamic Link fields are offered.
+
+		A Payment Entry's ``references`` child table uses Dynamic Link fields
+		(``reference_doctype`` + ``reference_name``) to point at the Sales
+		Invoice or Sales Order it settles. The Connections tab does not show
+		these — they are outgoing, not incoming — but they are exactly what a
+		user means by "the payment's linked documents". The picker must
+		discover them from the document's own Link and Dynamic Link fields.
+
+		Master data pointed at by parent-level Dynamic Links (Customer via
+		``party``) is NOT offered — only submittable (transactional) doctypes
+		qualify as "linked documents" to share alongside.
+		"""
+		from docshare.api import get_linked_documents_for
+		from erpnext.accounts.doctype.payment_entry.test_payment_entry import create_payment_entry
+		from erpnext.selling.doctype.sales_order.test_sales_order import make_sales_order
+
+		with docshare_setting(share_linked_documents=1):
+			pe = create_payment_entry(
+				payment_type="Receive",
+				party_type="Customer",
+				party="_Test Customer",
+				paid_amount=100,
+				save=True,
+			)
+			so = make_sales_order(qty=1, rate=100)
+			try:
+				# Link the Sales Order to the Payment Entry via its references
+				# child table — the standard ERPNext dynamic-link pattern.
+				pe_doc = frappe.get_doc("Payment Entry", pe.name)
+				pe_doc.append("references", {
+					"reference_doctype": "Sales Order",
+					"reference_name": so.name,
+					"allocated_amount": 100,
+				})
+				pe_doc.save(ignore_permissions=True)
+
+				offered = get_linked_documents_for("Payment Entry", pe.name)
+				linked_types = {o["linked_doctype"] for o in offered}
+
+				# The Sales Order referenced via dynamic link must be offered.
+				self.assertIn("Sales Order", linked_types)
+
+				# Customer (master data, pointed at by the parent-level
+				# ``party`` dynamic link) must NOT be offered — it is not a
+				# transactional document.
+				self.assertNotIn("Customer", linked_types)
+
+				# And the specific Sales Order row.
+				so_rows = [o for o in offered if o["linked_doctype"] == "Sales Order"]
+				self.assertEqual(len(so_rows), 1)
+				self.assertEqual(so_rows[0]["linked_docname"], so.name)
+			finally:
+				frappe.delete_doc("Payment Entry", pe.name, force=True, ignore_permissions=True)
+				so.cancel() if so.docstatus == 1 else None
+				frappe.delete_doc("Sales Order", so.name, force=True, ignore_permissions=True)
 
 	def test_share_token_is_unique(self):
 		create_share_link(doctype="ToDo", docname=self.todo.name)

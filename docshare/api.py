@@ -215,10 +215,28 @@ _MAX_LINKED_DOCUMENTS = 50
 def get_linked_documents_for(doctype: str, docname: str):
 	"""Return linked documents for the share popup selector.
 
-	Uses Frappe's native ``frappe.desk.form.linked_with.get`` API — the same
-	one that powers the Connections tab on every form. Returns a list of
-	dicts with ``doctype``, ``docname``, and ``docstatus`` for each linked
-	document the user can read.
+	Discovery is comprehensive — every document linked to this one, in
+	either direction, regardless of whether the Connections tab declares
+	it:
+
+	- **Incoming** — documents that have a Link or Dynamic Link field
+	  pointing at this one. Found by scanning every DocField and Custom
+	  Field in the system for references to this doctype, not by reading
+	  the Connections tab (which only shows what ``_dashboard.py``
+	  explicitly declares). Custom fields like ``event_booking`` on
+	  Quotation, undeclared reverse links, anything — all are found.
+	- **Outgoing** — documents this one points at through its own Link
+	  and Dynamic Link fields (parent and child tables). A Payment
+	  Entry's ``references`` → Sales Invoice, a Sales Invoice's
+	  ``return_against`` → another Sales Invoice, etc.
+
+	Only transactional documents (submittable doctypes) are offered —
+	master data (Customer, Company, Item, Warehouse) is excluded.
+	Comments, logs, ledger entries and DocShare's own doctypes are
+	excluded by ``_is_offerable_linked_doctype``.
+
+	Returns a list of dicts with ``linked_doctype``, ``linked_docname``,
+	and ``docstatus`` for each linked document the user can read.
 	"""
 	doctype = str(doctype or "").strip()
 	docname = str(docname or "").strip()
@@ -236,7 +254,7 @@ def get_linked_documents_for(doctype: str, docname: str):
 
 	def _add(linked_doctype, name, docstatus):
 		key = (linked_doctype, name)
-		if key in seen or docstatus == 2:
+		if key in seen or docstatus is None or docstatus == 2:
 			return
 		seen.add(key)
 		result.append({
@@ -245,46 +263,224 @@ def get_linked_documents_for(doctype: str, docname: str):
 			"docstatus": docstatus,
 		})
 
-	# The document's own Connections, read the way the desk tab reads them.
+	try:
+		doc = frappe.get_cached_doc(doctype, docname)
+	except Exception:
+		doc = None
+
+	# ------------------------------------------------------------------
+	# 1. Incoming links — every doctype that references this one.
+	# ------------------------------------------------------------------
+	# ``get_linked_doctypes`` scans every DocField and Custom Field for
+	# Link and Dynamic Link fields pointing at this doctype. It finds
+	# everything — standard ERPNext links, custom fields, undeclared
+	# reverse links — not just what the Connections tab shows.
 	#
-	# Only the reverse links defined in Connections. The document's own Link
-	# fields were tried too and were wrong: they pull in Customer, Company,
-	# Cost Center and Event Type — master records, not documents anyone would
-	# call a connection. Anything that matters both ways (a Quotation) already
-	# carries the reverse link, so Connections alone finds it.
-	#
-	# This used to rely on frappe.desk.form.linked_with.get, which returned
-	# nothing useful here. Its link map merges a doctype's direct link field
-	# with any child table that also carries one, and the child branch wins the
-	# elif chain — so with an event_booking field present on both Quotation and
-	# Sales Taxes and Charges, it searched the tax rows and found no Quotation.
-	# The Connections definitions are what "documents in connection" means to
-	# anyone looking at the form, so read those instead of inferring them.
-	meta = frappe.get_meta(doctype)
-	for link in (meta.links or []):
-		link_doctype = getattr(link, "link_doctype", None)
-		link_fieldname = getattr(link, "link_fieldname", None)
-		if not link_doctype or not link_fieldname:
+	# Its one bug: when a field exists on both a parent doctype and one
+	# of its child tables (Event Booking's ``event_booking`` on both
+	# Quotation and Sales Taxes and Charges), ``get_linked_fields``
+	# overwrites the parent entry with the child entry, so the parent
+	# is never queried directly. ``_resolve_incoming_link`` handles this
+	# by checking the parent first and only falling back to child tables
+	# when the parent does not carry the field.
+	from frappe.desk.form.linked_with import get_linked_doctypes
+
+	incoming_map = get_linked_doctypes(doctype) or {}
+	for linked_doctype, link_info in incoming_map.items():
+		if not _is_offerable_linked_doctype(linked_doctype):
 			continue
-		if not _is_offerable_linked_doctype(link_doctype):
+		if not _is_transactional_doctype(linked_doctype):
 			continue
-		if not frappe.has_permission(link_doctype, ptype="read"):
+		if not frappe.has_permission(linked_doctype, ptype="read"):
 			continue
+		for row in _resolve_incoming_link(doctype, linked_doctype, link_info, docname):
+			_add(linked_doctype, row.get("name"), row.get("docstatus"))
+
+	# ------------------------------------------------------------------
+	# 2. Outgoing links — this document's own Link and Dynamic Link fields.
+	# ------------------------------------------------------------------
+	# Scan the document's parent-level and child-table Link and Dynamic
+	# Link fields. A Payment Entry's ``references`` child table uses
+	# Dynamic Link fields to point at the Sales Invoice it pays; a Sales
+	# Invoice's ``return_against`` Link field points at another Sales
+	# Invoice. Both are outgoing links the Connections tab does not show.
+	if doc:
+		for ref in _discover_outgoing_links(doc):
+			ld_doctype = ref["doctype"]
+			ld_name = ref["name"]
+			if not _is_offerable_linked_doctype(ld_doctype):
+				continue
+			if not _is_transactional_doctype(ld_doctype):
+				continue
+			if not frappe.has_permission(ld_doctype, ptype="read"):
+				continue
+			docstatus = frappe.db.get_value(ld_doctype, ld_name, "docstatus")
+			_add(ld_doctype, ld_name, docstatus)
+
+	return result
+
+
+def _is_transactional_doctype(doctype: str) -> bool:
+	"""True if a doctype is a transactional document worth sharing.
+
+	Master data (Customer, Company, Item, Warehouse, Cost Center, Supplier)
+	is never a "linked document" a user would share alongside another — it
+	is reference data, not a transaction. Submittable doctypes are the
+	transactional documents in ERPNext (Sales Invoice, Sales Order, Payment
+	Entry, Quotation, Stock Entry, etc.), and those are what the picker
+	should offer.
+	"""
+	try:
+		meta = frappe.get_meta(doctype)
+	except Exception:
+		return False
+	return bool(getattr(meta, "is_submittable", 0))
+
+
+def _resolve_incoming_link(source_doctype: str, linked_doctype: str, link_info: dict, docname: str) -> list[dict]:
+	"""Find documents of ``linked_doctype`` that reference ``docname``.
+
+	``link_info`` is the value from ``get_linked_doctypes`` — it may carry
+	``fieldname`` (a list of fieldnames), ``child_doctype`` (the field is
+	on a child table), or ``doctype_fieldname`` (dynamic link: the field
+	holding the target doctype).
+
+	The parent doctype is always checked first. When the same fieldname
+	exists on both the parent and a child table (Event Booking's
+	``event_booking`` on both Quotation and Sales Taxes and Charges),
+	``get_linked_fields`` overwrites the parent entry with the child
+	entry — so this function re-checks the parent directly, avoiding
+	that shadowing bug. Only when the parent does not carry the field do
+	we resolve through child tables.
+	"""
+	fieldnames = link_info.get("fieldname") or []
+	if isinstance(fieldnames, str):
+		fieldnames = [fieldnames]
+	doctype_fieldname = link_info.get("doctype_fieldname")
+	child_doctype = link_info.get("child_doctype")
+
+	# Dynamic link: the linked doctype has a doctype field + a name field.
+	# Filter: doctype field = our source doctype, name field = our docname.
+	if doctype_fieldname:
+		name_field = fieldnames[0] if fieldnames else None
+		if not name_field:
+			return []
 		try:
-			rows = frappe.get_list(
-				link_doctype,
-				filters={link_fieldname: docname},
+			return frappe.get_list(
+				linked_doctype,
+				filters=[
+					[linked_doctype, doctype_fieldname, "=", source_doctype],
+					[linked_doctype, name_field, "=", docname],
+				],
 				fields=["name", "docstatus"],
 				limit_page_length=_MAX_LINKED_DOCUMENTS,
 				order_by="modified desc",
 			)
 		except Exception:
-			# A Connections entry can name a field that no longer exists.
-			continue
-		for row in rows:
-			_add(link_doctype, row.get("name"), row.get("docstatus"))
+			return []
 
-	return result
+	# Static Link field: check the parent doctype first.
+	linked_meta = frappe.get_meta(linked_doctype)
+	for fieldname in fieldnames:
+		if linked_meta.get_field(fieldname):
+			try:
+				rows = frappe.get_list(
+					linked_doctype,
+					filters={fieldname: docname},
+					fields=["name", "docstatus"],
+					limit_page_length=_MAX_LINKED_DOCUMENTS,
+					order_by="modified desc",
+				)
+			except Exception:
+				continue
+			if rows:
+				return rows
+
+	# Child-table field: resolve through the child table.
+	if child_doctype and fieldnames:
+		for fieldname in fieldnames:
+			try:
+				child_rows = frappe.get_all(
+					child_doctype,
+					filters={fieldname: docname},
+					fields=["parent"],
+					distinct=True,
+					limit_page_length=_MAX_LINKED_DOCUMENTS,
+					order_by=None,
+				)
+			except Exception:
+				continue
+			parent_names = [r.parent for r in child_rows if r.parent]
+			if not parent_names:
+				continue
+			try:
+				rows = frappe.get_list(
+					linked_doctype,
+					filters={"name": ["in", parent_names]},
+					fields=["name", "docstatus"],
+					limit_page_length=_MAX_LINKED_DOCUMENTS,
+					order_by="modified desc",
+				)
+			except Exception:
+				continue
+			if rows:
+				return rows
+
+	return []
+
+
+def _discover_outgoing_links(doc) -> list[dict]:
+	"""Documents this document points at through its Link and Dynamic Link fields.
+
+	Scans both parent-level and child-table fields. For Dynamic Link
+	fields (a pair: doctype field + name field), reads the referenced
+	doctype and name from the document. For static Link fields, reads the
+	referenced name directly — the doctype is the field's ``options``.
+
+	Returns a list of ``{"doctype": ..., "name": ...}`` dicts. Filtering
+	(transactional only, offerable, permissions) is the caller's job.
+	"""
+	refs = []
+	meta = frappe.get_meta(doc.doctype)
+
+	# Parent-level fields.
+	for df in meta.fields:
+		if df.fieldtype == "Dynamic Link":
+			doctype_fieldname = df.options
+			if not doctype_fieldname:
+				continue
+			ld_doctype = doc.get(doctype_fieldname)
+			ld_name = doc.get(df.fieldname)
+			if ld_doctype and ld_name:
+				refs.append({"doctype": ld_doctype, "name": ld_name})
+		elif df.fieldtype == "Link":
+			ld_name = doc.get(df.fieldname)
+			if ld_name and df.options:
+				refs.append({"doctype": df.options, "name": ld_name})
+
+	# Child-table fields.
+	for df in meta.fields:
+		if df.fieldtype not in frappe.model.table_fields:
+			continue
+		child_meta = frappe.get_meta(df.options)
+		if not child_meta:
+			continue
+		for row in doc.get(df.fieldname) or []:
+			for cf in child_meta.fields:
+				if cf.fieldtype == "Dynamic Link":
+					doctype_fieldname = cf.options
+					if not doctype_fieldname:
+						continue
+					ld_doctype = row.get(doctype_fieldname)
+					ld_name = row.get(cf.fieldname)
+					if ld_doctype and ld_name:
+						refs.append({"doctype": ld_doctype, "name": ld_name})
+				elif cf.fieldtype == "Link":
+					ld_name = row.get(cf.fieldname)
+					if ld_name and cf.options:
+						refs.append({"doctype": cf.options, "name": ld_name})
+
+	return refs
 
 
 @frappe.whitelist()
